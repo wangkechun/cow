@@ -26,13 +26,15 @@ var (
 	dbgRq  requestLogging
 	dbgRep responseLogging
 
-	logFile io.Writer
+	logFile     io.Writer
+	historyFile io.Writer
 
 	// make sure logger can be called before initLog
-	errorLog    = log.New(os.Stdout, "[ERROR] ", log.LstdFlags)
-	debugLog    = log.New(os.Stdout, "[DEBUG] ", log.LstdFlags)
-	requestLog  = log.New(os.Stdout, "[>>>>>] ", log.LstdFlags)
-	responseLog = log.New(os.Stdout, "[<<<<<] ", log.LstdFlags)
+	errorLog    = log.New(os.Stdout, "[ERROR] ", log.LstdFlags|log.Lshortfile)
+	debugLog    = log.New(os.Stdout, "[DEBUG] ", log.LstdFlags|log.Lshortfile)
+	requestLog  = log.New(os.Stdout, "[>>>>>] ", log.LstdFlags|log.Lshortfile)
+	responseLog = log.New(os.Stdout, "[<<<<<] ", log.LstdFlags|log.Lshortfile)
+	historyLog  = log.New(os.Stdout, "", 0)
 
 	verbose  bool
 	colorize bool
@@ -59,15 +61,26 @@ func initLog() {
 		}
 	}
 	log.SetOutput(logFile)
+
+	if config.HistoryFile == "" {
+		panic("config.HistoryFile == \"\"")
+	}
+	if f, err := os.OpenFile(expandTilde(config.HistoryFile),
+		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600); err != nil {
+		fmt.Printf("Can't open log file, logging to stdout: %v\n", err)
+	} else {
+		historyFile = f
+	}
+	historyLog.SetOutput(historyFile)
 	if colorize {
 		color.SetDefaultColor(color.ANSI)
 	} else {
 		color.SetDefaultColor(color.NoColor)
 	}
-	errorLog = log.New(logFile, color.Red("[ERROR] "), log.LstdFlags)
-	debugLog = log.New(logFile, color.Blue("[DEBUG] "), log.LstdFlags)
-	requestLog = log.New(logFile, color.Green("[>>>>>] "), log.LstdFlags)
-	responseLog = log.New(logFile, color.Yellow("[<<<<<] "), log.LstdFlags)
+	errorLog = log.New(logFile, color.Red("[ERROR] "), log.LstdFlags|log.Lshortfile)
+	debugLog = log.New(logFile, color.Blue("[DEBUG] "), log.LstdFlags|log.Lshortfile)
+	requestLog = log.New(logFile, color.Green("[>>>>>] "), log.LstdFlags|log.Lshortfile)
+	responseLog = log.New(logFile, color.Yellow("[<<<<<] "), log.LstdFlags|log.Lshortfile)
 }
 
 func (d infoLogging) Printf(format string, args ...interface{}) {
@@ -84,7 +97,8 @@ func (d infoLogging) Println(args ...interface{}) {
 
 func (d debugLogging) Printf(format string, args ...interface{}) {
 	if d {
-		debugLog.Printf(format, args...)
+		debugLog.Output(2, fmt.Sprintf(format, args...))
+		// debugLog.Printf(format, args...)
 	}
 }
 
@@ -108,7 +122,8 @@ func (d errorLogging) Println(args ...interface{}) {
 
 func (d requestLogging) Printf(format string, args ...interface{}) {
 	if d {
-		requestLog.Printf(format, args...)
+		requestLog.Output(3, fmt.Sprintf(format, args...))
+		// requestLog.Printf(format, args...)
 	}
 }
 

@@ -40,8 +40,9 @@ var defaultTunnelAllowedPort = []string{
 }
 
 type Config struct {
-	RcFile      string          // config file
-	LogFile     string          // path for log file
+	RcFile      string // config file
+	LogFile     string // path for log file
+	HistoryFile string
 	AlwaysProxy bool            // whether we should alwyas use parent proxy
 	LoadBalance LoadBalanceMode // select load balance mode
 
@@ -354,6 +355,10 @@ func (p configParser) ParseListen(val string) {
 
 func (p configParser) ParseLogFile(val string) {
 	config.LogFile = expandTilde(val)
+}
+
+func (p configParser) ParseHistoryFile(val string) {
+	config.HistoryFile = expandTilde(val)
 }
 
 func (p configParser) ParseAddrInPAC(val string) {

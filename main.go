@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log"
 	// "flag"
 	"os"
 	"os/exec"
@@ -29,6 +30,7 @@ func lookPath() (argv0 string, err error) {
 }
 
 func main() {
+	log.SetFlags(log.Lshortfile | log.Ldate | log.Ltime)
 	quit = make(chan struct{})
 	// Parse flags after load config to allow override options in config
 	cmdLineConfig := parseCmdLineConfig()

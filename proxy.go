@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -527,7 +530,7 @@ func (c *clientConn) serve() {
 				if r.hasBody() {
 					// skip request body
 					debug.Printf("cli(%s) skip request body %v\n", c.RemoteAddr(), &r)
-					sendBody(SinkWriter{}, c.bufRd, int(r.ContLen), r.Chunking)
+					sendBody(SinkWriter{}, c.bufRd, int(r.ContLen), r.Chunking, true)
 				}
 				continue
 			}
@@ -543,8 +546,10 @@ func (c *clientConn) serve() {
 			// debug.Printf("doConnect %s to %s done\n", c.RemoteAddr(), r.URL.HostPort)
 			return
 		}
+		var body string
+		body, err = sv.doRequest(c, &r, &rp)
+		if err != nil {
 
-		if err = sv.doRequest(c, &r, &rp); err != nil {
 			// For client I/O error, we can actually put server connection to
 			// pool. But let's make thing simple for now.
 			sv.Close()
@@ -556,6 +561,57 @@ func (c *clientConn) serve() {
 				continue
 			}
 			return
+		}
+		if body != "" {
+			respLog := &struct {
+				URL    string
+				Method string
+				Body   interface{}
+				Type   string
+			}{}
+			flushLog := func() {
+				respLog.Type = "unknow"
+				body, ok := respLog.Body.(string)
+				if !ok {
+					return
+				}
+				if len(body) >= 2 && body[0] == '{' {
+					var v interface{}
+					err := json.Unmarshal([]byte(body), &v)
+					if err == nil {
+						respLog.Type = "json"
+						respLog.Body = v
+					}
+				}
+				if respLog.Type == "unknow" {
+					m, err := url.ParseQuery(body)
+					if err == nil {
+						nest := false
+						m2 := make(map[string]string, 5)
+						respLog.Type = "form"
+						for i, v := range m {
+							if len(v) != 1 {
+								nest = true
+								break
+							} else {
+								m2[i] = v[0]
+							}
+						}
+						if !nest {
+							respLog.Body = m2
+						} else {
+							respLog.Body = m
+						}
+					}
+				}
+				b, _ := json.Marshal(respLog)
+				historyLog.Println(string(b))
+				historyFile.(*os.File).Sync()
+			}
+			respLog.URL = r.URL.String()
+			respLog.Method = r.Method
+			respLog.Body = body
+			flushLog()
 		}
 		// Put server connection to pool, so other clients can use it.
 		_, isCowConn := sv.Conn.(cowConn)
@@ -677,7 +733,7 @@ func (c *clientConn) readResponse(sv *serverConn, r *Request, rp *Response) (err
 	rp.releaseBuf()
 
 	if rp.hasBody(r.Method) {
-		if err = sendBody(c, sv.bufRd, int(rp.ContLen), rp.Chunking); err != nil {
+		if _, err = sendBody(c, sv.bufRd, int(rp.ContLen), rp.Chunking, false); err != nil {
 			if debug {
 				debug.Printf("cli(%s) send body %v\n", c.RemoteAddr(), err)
 			}
@@ -1252,14 +1308,14 @@ func (sv *serverConn) sendRequestHeader(r *Request, c *clientConn) (err error) {
 	return
 }
 
-func (sv *serverConn) sendRequestBody(r *Request, c *clientConn) (err error) {
+func (sv *serverConn) sendRequestBody(r *Request, c *clientConn) (body string, err error) {
 	// Send request body. If this is retry, r.raw contains request body and is
 	// sent while sending raw request.
 	if !r.hasBody() || r.isRetry() {
 		return
 	}
-
-	err = sendBody(newServerWriter(r, sv), c.bufRd, int(r.ContLen), r.Chunking)
+	// record post head
+	body, err = sendBody(newServerWriter(r, sv), c.bufRd, int(r.ContLen), r.Chunking, true)
 	if err != nil {
 		errl.Printf("cli(%s) send request body error %v %s\n", c.RemoteAddr(), err, r)
 		if isErrOpWrite(err) {
@@ -1274,19 +1330,19 @@ func (sv *serverConn) sendRequestBody(r *Request, c *clientConn) (err error) {
 }
 
 // Do HTTP request other that CONNECT
-func (sv *serverConn) doRequest(c *clientConn, r *Request, rp *Response) (err error) {
+func (sv *serverConn) doRequest(c *clientConn, r *Request, rp *Response) (body string, err error) {
 	r.state = rsCreated
 	if err = sv.sendRequestHeader(r, c); err != nil {
 		return
 	}
-	if err = sv.sendRequestBody(r, c); err != nil {
+	if body, err = sv.sendRequestBody(r, c); err != nil {
 		return
 	}
 	r.state = rsSent
 	if err = c.readResponse(sv, r, rp); err == nil {
 		sv.updateVisit()
 	}
-	return err
+	return
 }
 
 // Send response body if header specifies content length
@@ -1425,20 +1481,54 @@ func sendBodySplitIntoChunk(w io.Writer, r *bufio.Reader) (err error) {
 	}
 }
 
+func TeeReader(r io.Reader, w io.Writer) io.Reader {
+	return &teeReader{r, w, 0}
+}
+
+type teeReader struct {
+	r    io.Reader
+	w    io.Writer
+	size int
+}
+
+func (t *teeReader) Read(p []byte) (n int, err error) {
+	n, err = t.r.Read(p)
+	if n > 0 {
+		if n+t.size > 4*1024 {
+			return
+		}
+		if n, err := t.w.Write(p[:n]); err != nil {
+			return n, err
+		}
+	}
+	return
+}
+
 // Send message body.
-func sendBody(w io.Writer, bufRd *bufio.Reader, contLen int, chunk bool) (err error) {
+func sendBody(w io.Writer, bufRd *bufio.Reader, contLen int, chunk bool, record bool) (body string, err error) {
 	// chunked encoding has precedence over content length
 	// COW does not sanitize response header, but can correctly handle it
+	var buf bytes.Buffer
+	if record {
+		tee := TeeReader(bufRd, &buf)
+		bufRd = bufio.NewReader(tee)
+	}
 	if chunk {
+		debug.Println("sendBodyChunked")
 		err = sendBodyChunked(w, bufRd, httpBufSize)
 	} else if contLen >= 0 {
 		// It's possible to have content length 0 if server response has no
 		// body.
+		debug.Println("sendBodyWithContLen")
 		err = sendBodyWithContLen(w, bufRd, int(contLen))
 	} else {
 		// Must be reading server response here, because sendBody is called in
 		// reading response iff chunked or content length > 0.
+		debug.Println("sendBodySplitIntoChunk")
 		err = sendBodySplitIntoChunk(w, bufRd)
+	}
+	if record {
+		body = buf.String()
 	}
 	return
 }
