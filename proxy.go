@@ -439,6 +439,13 @@ func (s SinkWriter) Write(p []byte) (int, error) {
 }
 
 func (c *clientConn) serve() {
+	respLog := &struct {
+		URL          string
+		Method       string
+		Body         interface{}
+		Type         string
+		HeaderString string
+	}{}
 	var r Request
 	var rp Response
 	var sv *serverConn
@@ -475,6 +482,7 @@ func (c *clientConn) serve() {
 				"Your browser didn't send a complete request in time.")
 			return
 		}
+		respLog.HeaderString = string(r.Verbose())
 		dbgPrintRq(c, &r)
 
 		// PAC may leak frequently visited sites information. But if cow
@@ -563,12 +571,7 @@ func (c *clientConn) serve() {
 			return
 		}
 		if body != "" {
-			respLog := &struct {
-				URL    string
-				Method string
-				Body   interface{}
-				Type   string
-			}{}
+
 			flushLog := func() {
 				respLog.Type = "unknow"
 				body, ok := respLog.Body.(string)
