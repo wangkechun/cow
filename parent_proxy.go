@@ -57,6 +57,9 @@ func initParentPool() {
 	case loadBalanceHash:
 		debug.Println("hash parent pool", len(backPool.parent))
 		parentProxy = &hashParentPool{*backPool}
+	case loadBalanceRand:
+		debug.Println("rand parent pool", len(backPool.parent))
+		parentProxy = &randParentPool{*backPool}
 	case loadBalanceLatency:
 		debug.Println("latency parent pool", len(backPool.parent))
 		go updateParentProxyLatency()
@@ -126,6 +129,22 @@ func (parent *ParentWithFail) connect(url *URL) (srvconn net.Conn, err error) {
 	}
 	parent.fail = 0
 	return
+}
+
+func init() {
+	rand.Seed(time.Now().Unix())
+}
+
+// Rand load balance strategy:
+// Each host will use a proxy based on a rand value.
+type randParentPool struct {
+	backupParentPool
+}
+
+func (pp *randParentPool) connect(url *URL) (srvconn net.Conn, err error) {
+	start := int(rand.Intn(len(pp.parent)) % len(pp.parent))
+	debug.Printf("rand host %s try %d parent first", url.Host, start)
+	return connectInOrder(url, pp.parent, start)
 }
 
 func connectInOrder(url *URL, pp []ParentWithFail, start int) (srvconn net.Conn, err error) {

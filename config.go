@@ -27,6 +27,7 @@ const (
 	loadBalanceBackup LoadBalanceMode = iota
 	loadBalanceHash
 	loadBalanceLatency
+	loadBalanceRand
 )
 
 // allow the same tunnel ports as polipo
@@ -457,6 +458,8 @@ func (p configParser) ParseLoadBalance(val string) {
 		config.LoadBalance = loadBalanceHash
 	case "latency":
 		config.LoadBalance = loadBalanceLatency
+	case "rand":
+		config.LoadBalance = loadBalanceRand
 	default:
 		Fatalf("invalid loadBalance mode: %s\n", val)
 	}
