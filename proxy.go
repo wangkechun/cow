@@ -505,7 +505,7 @@ func (c *clientConn) serve() {
 			}
 			authed = true
 		}
-
+		RateLimit(c, &r)
 		if r.isConnect && !config.TunnelAllowedPort[r.URL.Port] {
 			sendErrorPage(c, statusForbidden, "Forbidden tunnel port",
 				genErrMsg(&r, nil, "Please contact proxy admin."))

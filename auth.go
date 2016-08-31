@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/cyfdecyf/bufio"
+	"github.com/k0kubun/pp"
 	"net"
 	"os"
 	"strconv"
@@ -35,9 +36,10 @@ type netAddr struct {
 
 type authUser struct {
 	// user name is the key to auth.user, no need to store here
-	passwd string
-	ha1    string // used in request digest, initialized ondemand
-	port   uint16 // 0 means any port
+	passwd    string
+	ha1       string // used in request digest, initialized ondemand
+	port      uint16 // 0 means any port
+	ratelimit int
 }
 
 var auth struct {
@@ -61,7 +63,7 @@ func (au *authUser) initHA1(user string) {
 func parseUserPasswd(userPasswd string) (user string, au *authUser, err error) {
 	arr := strings.Split(userPasswd, ":")
 	n := len(arr)
-	if n == 1 || n > 3 {
+	if n == 1 || n > 4 {
 		err = errors.New("user password: " + userPasswd +
 			" syntax wrong, should be username:password[:port]")
 		return
@@ -73,14 +75,22 @@ func parseUserPasswd(userPasswd string) (user string, au *authUser, err error) {
 		return "", nil, err
 	}
 	var port int
-	if n == 3 && arr[2] != "" {
+	if (n == 3 || n == 4) && arr[2] != "" {
 		port, err = strconv.Atoi(arr[2])
-		if err != nil || port <= 0 || port > 0xffff {
+		if err != nil || port < 0 || port > 0xffff {
 			err = errors.New("user password: " + userPasswd + " invalid port")
 			return "", nil, err
 		}
 	}
-	au = &authUser{passwd, "", uint16(port)}
+	var rateLimit int
+	if n == 4 {
+		rateLimit, err = strconv.Atoi(arr[3])
+		if err != nil || rateLimit < 0 {
+			err = errors.New("user password: " + userPasswd + " invalid rateLimit")
+			return "", nil, err
+		}
+	}
+	au = &authUser{passwd, "", uint16(port), rateLimit}
 	return user, au, nil
 }
 
@@ -122,7 +132,7 @@ func addUserPasswd(val string) {
 		return
 	}
 	user, au, err := parseUserPasswd(val)
-	debug.Println("user:", user, "port:", au.port)
+	debug.Println("user:", user, "port:", au.port, "rateLimit:", au.ratelimit)
 	if err != nil {
 		Fatal(err)
 	}
@@ -177,6 +187,35 @@ func initAuth() {
 	}
 }
 
+func RateLimit(conn *clientConn, r *Request) error {
+
+	if debug {
+		debug.Printf("cli(%s) RateLimit: %s\n", conn.RemoteAddr(), r.ProxyAuthorization)
+	}
+
+	arr := strings.SplitN(r.ProxyAuthorization, " ", 2)
+	if len(arr) != 2 {
+		return errors.New("auth: malformed ProxyAuthorization header: " + r.ProxyAuthorization)
+	}
+	authMethod := strings.ToLower(strings.TrimSpace(arr[0]))
+
+	var au *authUser
+	var user string
+	var err error
+	if authMethod == "digest" {
+		user, au, err = authDigestAu(conn, r, arr[1])
+	} else if authMethod == "basic" {
+		user, au, err = authBasicAu(conn, arr[1])
+		if err != nil {
+			return err
+		}
+	}
+	pp.Println(user, au)
+	// debug.Println("@@", user, au.passwd, au.passwd, au.ratelimit)
+
+	return errors.New("auth: method " + arr[0] + " unsupported, must use digest")
+}
+
 // Return err = nil if authentication succeed. nonce would be not empty if
 // authentication is needed, and should be passed back on subsequent call.
 func Authenticate(conn *clientConn, r *Request) (err error) {
@@ -229,6 +268,50 @@ func calcRequestDigest(kv map[string]string, ha1, method string) string {
 		md5sum(method + ":" + kv["uri"]),
 	}
 	return md5sum(strings.Join(arr, ":"))
+}
+
+func authBasicAu(conn *clientConn, userPasswd string) (user string, au *authUser, err error) {
+	b64, err := base64.StdEncoding.DecodeString(userPasswd)
+	if err != nil {
+		return "", nil, errors.New("auth:" + err.Error())
+	}
+	arr := strings.Split(string(b64), ":")
+	if len(arr) != 2 {
+		return "", nil, errors.New("auth: malformed basic auth user:passwd")
+	}
+	user = arr[0]
+	passwd := arr[1]
+
+	au, ok := auth.user[user]
+	if !ok || au.passwd != passwd {
+		return "", nil, errAuthRequired
+	}
+	return user, au, nil
+}
+
+func authDigestAu(conn *clientConn, r *Request, keyVal string) (user string, au *authUser, err error) {
+	authHeader := parseKeyValueList(keyVal)
+	if len(authHeader) == 0 {
+		return "", nil, errors.New("auth: empty authorization list")
+	}
+	nonceTime, err := strconv.ParseInt(authHeader["nonce"], 16, 64)
+	if err != nil {
+		return "", nil, fmt.Errorf("auth: nonce %v", err)
+	}
+	// If nonce time too early, reject. iOS will create a new connection to do
+	// authentication.
+	if time.Now().Sub(time.Unix(nonceTime, 0)) > time.Minute {
+		return "", nil, errAuthRequired
+	}
+
+	user = authHeader["username"]
+	au, ok := auth.user[user]
+	if !ok {
+		errl.Printf("cli(%s) auth: no such user: %s\n", conn.RemoteAddr(), authHeader["username"])
+		return "", nil, errAuthRequired
+	}
+
+	return user, au, nil
 }
 
 func checkProxyAuthorization(conn *clientConn, r *Request) error {
