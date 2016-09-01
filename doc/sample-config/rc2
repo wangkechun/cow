@@ -29,6 +29,9 @@ listen = http://127.0.0.1:7777
 # 日志文件路径，如不指定则输出到 stdout
 #logFile =
 
+# 开启流量限制的时候，允许用户临时超出其并发数的请求数目
+ratelimitCapacity = 100
+
 # 访问历史记录文件，需要指定
 historyFile = history.log
 # COW 默认仅对被墙网站使用二级代理
@@ -116,10 +119,11 @@ proxy = socks5://127.0.0.1:1081
 #userPasswd = username:password
 
 # 如需指定多个用户名密码，可在下面选项指定的文件中列出，文件中每行内容如下
-#   username:password[:port]
+#   username:password:port:limit
 # port 为可选项，若指定，则该用户只能从指定端口连接 COW
+# limit 为该用户每秒的并发限制
 # 注意：如有重复用户，COW 会报错退出
-#userPasswdFile = /path/to/file
+userPasswdFile = ./userlist
 
 # 认证失效时间
 # 语法：2h3m4s 表示 2 小时 3 分钟 4 秒

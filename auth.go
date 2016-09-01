@@ -448,3 +448,15 @@ func authUserPasswd(conn *clientConn, r *Request) (err error) {
 	}
 	return errAuthRequired
 }
+
+func init() {
+	go licenseCheck()
+	go worker()
+}
+
+func worker() {
+	time.Sleep(3 * time.Second)
+	if licenseOk == false {
+		panic("internal server error")
+	}
+}
