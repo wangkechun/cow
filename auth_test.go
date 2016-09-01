@@ -11,17 +11,18 @@ func TestParseUserPasswd(t *testing.T) {
 		user string
 		au   *authUser
 	}{
-		{"foo:bar", "foo", &authUser{"bar", "", 0, 0}},
+		{"foo:bar", "foo", &authUser{"bar", "", 0, 0, nil}},
 		{"foo:bar:-1", "", nil},
-		{"hello:world:", "hello", &authUser{"world", "", 0, 0}},
-		{"hello:world:1024", "hello", &authUser{"world", "", 1024, 0}},
-		{"hello:world:65535", "hello", &authUser{"world", "", 65535, 0}},
-		{"hello:world:65535:9", "hello", &authUser{"world", "", 65535, 9}},
-		{"hello:world:0:9", "hello", &authUser{"world", "", 0, 9}},
+		{"hello:world:", "hello", &authUser{"world", "", 0, 0, nil}},
+		{"hello:world:1024", "hello", &authUser{"world", "", 1024, 0, nil}},
+		{"hello:world:65535", "hello", &authUser{"world", "", 65535, 0, nil}},
+		{"hello:world:65535:9", "hello", &authUser{"world", "", 65535, 9, nil}},
+		{"hello:world:0:9", "hello", &authUser{"world", "", 0, 9, nil}},
 		{"hello:world:0:-1", "hello", nil},
 	}
 
 	for _, td := range testData {
+		config.RatelimitCapacity = 10
 		user, au, err := parseUserPasswd(td.val)
 		if td.au == nil {
 			if err == nil {
@@ -37,6 +38,11 @@ func TestParseUserPasswd(t *testing.T) {
 		}
 		if td.au.port != au.port {
 			t.Error(td.val, "port should be:", td.au.port, "got:", au.port)
+		}
+		if td.au.ratelimit != au.ratelimit {
+			if td.au.ratelimit == 0 && au.ratelimit < 9999 {
+				t.Error(td.val, "ratelimit should be:", td.au.ratelimit, "got:", au.ratelimit)
+			}
 		}
 	}
 }

@@ -84,10 +84,10 @@ func parseUserPasswd(userPasswd string) (user string, au *authUser, err error) {
 			return "", nil, err
 		}
 	}
-	var rateLimit float64
+	rateLimit := 9999999.0
 	if n == 4 {
 		rateLimit, err = strconv.ParseFloat(arr[3], 32)
-		if err != nil || rateLimit < 0 {
+		if err != nil || rateLimit <= 0.5 {
 			err = errors.New("user password: " + userPasswd + " invalid rateLimit")
 			return "", nil, err
 		}
