@@ -5,14 +5,15 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"github.com/cyfdecyf/bufio"
-	"github.com/k0kubun/pp"
 	"net"
 	"os"
 	"strconv"
 	"strings"
 	"text/template"
 	"time"
+
+	"github.com/cyfdecyf/bufio"
+	"github.com/juju/ratelimit"
 )
 
 const (
@@ -36,10 +37,11 @@ type netAddr struct {
 
 type authUser struct {
 	// user name is the key to auth.user, no need to store here
-	passwd    string
-	ha1       string // used in request digest, initialized ondemand
-	port      uint16 // 0 means any port
-	ratelimit int
+	passwd      string
+	ha1         string // used in request digest, initialized ondemand
+	port        uint16 // 0 means any port
+	ratelimit   float64
+	ratelimiter *ratelimit.Bucket
 }
 
 var auth struct {
@@ -82,15 +84,16 @@ func parseUserPasswd(userPasswd string) (user string, au *authUser, err error) {
 			return "", nil, err
 		}
 	}
-	var rateLimit int
+	var rateLimit float64
 	if n == 4 {
-		rateLimit, err = strconv.Atoi(arr[3])
+		rateLimit, err = strconv.ParseFloat(arr[3], 32)
 		if err != nil || rateLimit < 0 {
 			err = errors.New("user password: " + userPasswd + " invalid rateLimit")
 			return "", nil, err
 		}
 	}
-	au = &authUser{passwd, "", uint16(port), rateLimit}
+	ratelimiter := ratelimit.NewBucketWithRate(rateLimit, int64(config.RatelimitCapacity))
+	au = &authUser{passwd, "", uint16(port), rateLimit, ratelimiter}
 	return user, au, nil
 }
 
@@ -187,6 +190,8 @@ func initAuth() {
 	}
 }
 
+var ErrorConcurrencyLimit = errors.New("Concurrency limit")
+
 func RateLimit(conn *clientConn, r *Request) error {
 
 	if debug {
@@ -204,13 +209,19 @@ func RateLimit(conn *clientConn, r *Request) error {
 	var err error
 	if authMethod == "digest" {
 		user, au, err = authDigestAu(conn, r, arr[1])
+		if err != nil {
+			return err
+		}
 	} else if authMethod == "basic" {
 		user, au, err = authBasicAu(conn, arr[1])
 		if err != nil {
 			return err
 		}
 	}
-	pp.Println(user, au)
+	if au.ratelimiter.TakeAvailable(1) == 0 {
+		debug.Printf("RateLimit TakeAvailable error , user:%s", user)
+		return ErrorConcurrencyLimit
+	}
 	// debug.Println("@@", user, au.passwd, au.passwd, au.ratelimit)
 
 	return errors.New("auth: method " + arr[0] + " unsupported, must use digest")

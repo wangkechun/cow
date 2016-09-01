@@ -61,6 +61,8 @@ type Config struct {
 	DialTimeout time.Duration
 	ReadTimeout time.Duration
 
+	RatelimitCapacity int
+
 	Core         int
 	DetectSSLErr bool
 
@@ -573,6 +575,13 @@ func (p configParser) ParseAllowedClient(val string) {
 
 func (p configParser) ParseAuthTimeout(val string) {
 	config.AuthTimeout = parseDuration(val, "authTimeout")
+}
+
+func (p configParser) ParseRatelimitCapacity(val string) {
+	config.RatelimitCapacity = parseInt(val, "ratelimitCapacity")
+	if config.RatelimitCapacity == 0 {
+		Fatal("ratelimitCapacity should > 0")
+	}
 }
 
 func (p configParser) ParseCore(val string) {

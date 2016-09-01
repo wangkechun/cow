@@ -505,7 +505,11 @@ func (c *clientConn) serve() {
 			}
 			authed = true
 		}
-		RateLimit(c, &r)
+		if err = RateLimit(c, &r); err == ErrorConcurrencyLimit {
+			sendErrorPage(c, statusForbidden, "Concurrency limit",
+				genErrMsg(&r, nil, "Please contact proxy admin."))
+			return
+		}
 		if r.isConnect && !config.TunnelAllowedPort[r.URL.Port] {
 			sendErrorPage(c, statusForbidden, "Forbidden tunnel port",
 				genErrMsg(&r, nil, "Please contact proxy admin."))
